@@ -32,14 +32,14 @@ if 'drift_detected' not in st.session_state:
 if 'calibrated_multiplier' not in st.session_state:
     st.session_state.calibrated_multiplier = 1.0
 
-st.title("🧠 Adaptive Baghewala Twin (BAT)")
+st.title("Adaptive Baghewala Twin (BAT)")
 
 if using_ml:
     st.success("MODEL MODE: ML Inference Active")
 else:
     st.warning(f"MODEL MODE: Physics Simulation Fallback (ML inference unavailable; physics simulation is being used. Reason: {model_state['reason']})")
 
-st.sidebar.header("⏱️ Time Machine Simulator")
+st.sidebar.header("Time Machine Simulator")
 st.sidebar.markdown(f"**Current Day:** {st.session_state.current_day}")
 
 if st.sidebar.button("Advance 7 Days (Simulate Field)"):
@@ -97,22 +97,78 @@ else:
     pred_float = calculate_float_risk(pred_visc, spm)
     failure_risk = np.where(pred_float > 80, 80, pred_float / 2)
 
-# Visualization
-col1, col2 = st.columns(2)
+tab1, tab2, tab3, tab4 = st.tabs(["WELL ANALYTICS", "FIELD COMMAND", "ECONOMIC OPTIMIZER", "LIVE SCADA STREAM"])
 
-with col1:
-    fig1 = go.Figure()
-    fig1.add_trace(go.Scatter(x=days, y=pred_temp + temp_uncertainty, line=dict(width=0), showlegend=False))
-    fig1.add_trace(go.Scatter(x=days, y=pred_temp - temp_uncertainty, fill='tonexty', fillcolor='rgba(255, 255, 255, 0.1)', line=dict(width=0), name="Confidence Interval"))
-    fig1.add_trace(go.Scatter(x=days, y=pred_temp, name="Predicted Temp", line=dict(color='#00BFFF', width=2, dash='dash')))
-    fig1.add_trace(go.Scatter(x=days[:st.session_state.current_day+1], y=actual_temp[:st.session_state.current_day+1], name="Actual Field Temp", line=dict(color='#FF4B4B', width=3)))
-    fig1.update_layout(title="M1: Thermal State Estimation & Drift Tracking", xaxis_title="Days", yaxis_title="Temperature (°C)")
-    st.plotly_chart(fig1, use_container_width=True)
+with tab1:
+    st.subheader("Single Well AI Diagnostics")
+    col1, col2 = st.columns(2)
+    with col1:
+        fig1 = go.Figure()
+        fig1.add_trace(go.Scatter(x=days, y=pred_temp + temp_uncertainty, line=dict(width=0), showlegend=False))
+        fig1.add_trace(go.Scatter(x=days, y=pred_temp - temp_uncertainty, fill='tonexty', fillcolor='rgba(255, 255, 255, 0.1)', line=dict(width=0), name="Confidence Interval"))
+        fig1.add_trace(go.Scatter(x=days, y=pred_temp, name="Predicted Temp", line=dict(color='#00BFFF', width=2, dash='dash')))
+        fig1.add_trace(go.Scatter(x=days[:st.session_state.current_day+1], y=actual_temp[:st.session_state.current_day+1], name="Actual Field Temp", line=dict(color='#FF4B4B', width=3)))
+        fig1.update_layout(title="M1: Thermal State Estimation & Drift Tracking", xaxis_title="Days", yaxis_title="Temperature (°C)")
+        st.plotly_chart(fig1, use_container_width=True)
 
-with col2:
-    fig2 = go.Figure()
-    fig2.add_trace(go.Scatter(x=days, y=spm, name="AI Recommended SPM", line=dict(color='#00FF00', width=2)))
-    fig2.add_trace(go.Scatter(x=days, y=pred_float, name="Float Risk Prediction", line=dict(color='yellow', width=2, dash='dot')))
-    fig2.add_trace(go.Scatter(x=days, y=failure_risk, fill='tozeroy', name="Critical Failure Risk (%)", line=dict(color='red', width=2), fillcolor='rgba(255, 0, 0, 0.2)'))
-    fig2.update_layout(title="M6 & ML Inference: Pump Control & Risk Profile", xaxis_title="Days", yaxis_title="Risk (%) / SPM")
-    st.plotly_chart(fig2, use_container_width=True)
+    with col2:
+        fig2 = go.Figure()
+        fig2.add_trace(go.Scatter(x=days, y=spm, name="AI Recommended SPM", line=dict(color='#00FF00', width=2)))
+        fig2.add_trace(go.Scatter(x=days, y=pred_float, name="Float Risk Prediction", line=dict(color='yellow', width=2, dash='dot')))
+        fig2.add_trace(go.Scatter(x=days, y=failure_risk, fill='tozeroy', name="Critical Failure Risk (%)", line=dict(color='red', width=2), fillcolor='rgba(255, 0, 0, 0.2)'))
+        fig2.update_layout(title="M6 & ML Inference: Pump Control & Risk Profile", xaxis_title="Days", yaxis_title="Risk (%) / SPM")
+        st.plotly_chart(fig2, use_container_width=True)
+
+with tab2:
+    st.subheader("Baghewala Field Command Center")
+    st.markdown("Monitor all 42 heavy oil wells in the sector simultaneously. The AI highlights high-risk wells requiring immediate maintenance.")
+    
+    # Dummy grid of wells
+    field_cols = st.columns(4)
+    wells = [("BGH-01", "Healthy", "green"), ("BGH-02", "Critical Risk", "red"), ("BGH-03", "Warning", "orange"), ("BGH-04", "Healthy", "green"),
+             ("BGH-05", "Healthy", "green"), ("BGH-06", "Offline", "gray"), ("BGH-07", "Critical Risk", "red"), ("BGH-08", "Warning", "orange")]
+    
+    for i, (well, status, color) in enumerate(wells):
+        with field_cols[i % 4]:
+            st.markdown(f"""
+            <div style="background-color: #262730; padding: 15px; border-radius: 10px; text-align: center; margin-bottom: 15px; border: 2px solid {color};">
+                <h3 style="margin:0;">{well}</h3>
+                <p style="color:{color}; font-weight:bold; margin:0;">{status}</p>
+                <small>SPM: {np.random.randint(4, 9)} | Temp: {np.random.randint(60, 180)}°C</small>
+            </div>
+            """, unsafe_allow_html=True)
+
+with tab3:
+    st.subheader("Net Present Value (NPV) & Economic Optimizer")
+    
+    # Dummy economic calculation based on our simulation
+    oil_price = 70.0  # $ per bbl
+    steam_cost_per_day = 500.0
+    rod_break_penalty = 50000.0 # Cost to fix a snapped rod
+    
+    # Calculate daily production loosely based on physics
+    daily_prod = (actual_temp / T_res) * 50 * (spm / 6.0) 
+    cumulative_revenue = np.cumsum(daily_prod * oil_price)
+    
+    # Calculate expected penalty cost based on AI failure risk
+    expected_penalty = (failure_risk / 100) * rod_break_penalty
+    cumulative_cost = np.cumsum(np.full_like(days, steam_cost_per_day) + expected_penalty)
+    
+    npv = cumulative_revenue - cumulative_cost
+    
+    fig3 = go.Figure()
+    fig3.add_trace(go.Scatter(x=days, y=cumulative_revenue, name="Cumulative Revenue ($)", line=dict(color='#00FF00', width=2)))
+    fig3.add_trace(go.Scatter(x=days, y=cumulative_cost, name="Cumulative Cost + Expected Penalty ($)", line=dict(color='#FF4B4B', width=2)))
+    fig3.add_trace(go.Scatter(x=days, y=npv, name="Net Present Value (NPV)", fill='tozeroy', line=dict(color='#00BFFF', width=3)))
+    
+    fig3.update_layout(title="Economic Viability: Balancing Production vs. Failure Risk", xaxis_title="Days", yaxis_title="Dollars ($)")
+    st.plotly_chart(fig3, use_container_width=True)
+    
+with tab4:
+    st.subheader("Live SCADA Data Stream")
+    st.markdown("Raw data pipeline feeding into the machine learning inference engine.")
+    
+    if using_ml:
+        st.dataframe(X_inference.head(st.session_state.current_day + 10).style.highlight_max(axis=0, color='red'), use_container_width=True)
+    else:
+        st.info("Physics Fallback Active. SCADA stream simulation requires ML Inference Mode.")
