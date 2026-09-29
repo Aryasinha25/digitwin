@@ -2,31 +2,26 @@ import streamlit as st
 import numpy as np
 import pandas as pd
 import plotly.graph_objects as go
-import joblib
-import os
 
 from core.thermal_model_v2 import calculate_temperature_decay_with_uncertainty, calculate_viscosity
 from core.wave_equation import calculate_float_risk, calculate_production
 from core.optimizer import optimize_spm
+from core.model_loader import load_models
 
 st.set_page_config(page_title="Adaptive Baghewala Twin", layout="wide")
 
-# --- Try to load the trained ML Models ---
-MODEL_DIR = os.path.join(os.path.dirname(__file__), 'core', 'models')
-risk_model_path = os.path.join(MODEL_DIR, 'rf_risk_model.pkl')
-failure_model_path = os.path.join(MODEL_DIR, 'rf_failure_model.pkl')
-
-try:
-    rf_risk_model = joblib.load(risk_model_path)
-    rf_failure_model = joblib.load(failure_model_path)
-    using_ml = True
-except FileNotFoundError:
-    using_ml = False
+# --- Formally Load Models ---
+model_state = load_models()
+using_ml = (model_state["mode"] == "ml")
 
 st.markdown("""
 <style>
     .main { background-color: #0E1117; color: #FAFAFA; }
     .stButton>button { width: 100%; font-weight: bold; background-color: #FF4B4B; color: white; }
+    .health-box { background-color: #1e1e1e; padding: 10px; border-radius: 5px; font-family: monospace; font-size: 12px; }
+    .status-ready { color: #00FF00; }
+    .status-failed { color: #FF0000; }
+    .status-degraded { color: #FFA500; }
 </style>
 """, unsafe_allow_html=True)
 
@@ -38,10 +33,11 @@ if 'calibrated_multiplier' not in st.session_state:
     st.session_state.calibrated_multiplier = 1.0
 
 st.title("🧠 Adaptive Baghewala Twin (BAT)")
+
 if using_ml:
-    st.success("✅ Live ML Inference Active: Powered by Scikit-Learn Random Forest.")
+    st.success("MODEL MODE: ML Inference Active")
 else:
-    st.warning("⚠️ Physics Surrogate Mode: Run `core/ml_trainer.py` to train the Random Forest and activate Live ML Inference.")
+    st.warning(f"MODEL MODE: Physics Simulation Fallback (ML inference unavailable; physics simulation is being used. Reason: {model_state['reason']})")
 
 st.sidebar.header("⏱️ Time Machine Simulator")
 st.sidebar.markdown(f"**Current Day:** {st.session_state.current_day}")
@@ -57,6 +53,16 @@ if st.sidebar.button("Reset Simulator"):
     st.session_state.current_day = 0
     st.session_state.drift_detected = False
     st.session_state.calibrated_multiplier = 1.0
+
+# --- MODEL HEALTH DASHBOARD ---
+st.sidebar.markdown("---")
+st.sidebar.markdown("### MODEL HEALTH")
+health_html = '<div class="health-box">'
+for k, v in model_state['health'].items():
+    color_class = "status-ready" if v == "READY" else "status-failed" if v == "FAILED" else "status-degraded"
+    health_html += f"<div>{k.replace('_', ' ').title()}: <span class='{color_class}'>{v}</span></div>"
+health_html += "</div>"
+st.sidebar.markdown(health_html, unsafe_allow_html=True)
 
 days = np.arange(0, 180, 1)
 T_res = 47.0
@@ -80,16 +86,12 @@ stroke = np.full_like(days, 3.0)
 
 # 2. Inference: ML vs Physics
 if using_ml:
-    # Build feature DataFrame for the ML model
-    X_inference = pd.DataFrame({
-        'Temperature_C': pred_temp,
-        'Viscosity_cP': pred_visc,
-        'SPM': spm,
-        'Stroke_Length_m': stroke
-    })
-    # Actual ML Inference
+    X_inference = pd.DataFrame({'Temperature_C': pred_temp, 'Viscosity_cP': pred_visc, 'SPM': spm, 'Stroke_Length_m': stroke})
+    rf_risk_model = model_state["models"]["risk_model"]
+    rf_failure_model = model_state["models"]["failure_model"]
+    
     pred_float = rf_risk_model.predict(X_inference)
-    failure_risk = rf_failure_model.predict_proba(X_inference)[:, 1] * 100 # Probability of failure
+    failure_risk = rf_failure_model.predict_proba(X_inference)[:, 1] * 100 
 else:
     # Fallback to physics math
     pred_float = calculate_float_risk(pred_visc, spm)
