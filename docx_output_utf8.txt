@@ -1,0 +1,215 @@
+﻿Smart India Hackathon 2026
+ThermoRod Twin
+A coupled Well-to-Surface Digital Twin for CSS and Sucker Rod Pump optimization in the heavy-oil wells of Baghewala Field
+
+
+
+
+1. Executive summary
+Baghewala produces heavy, viscous crude from the Jodhpur Sandstone. Cyclic Steam Stimulation (CSS) heats the near-wellbore zone, and a sucker rod pump (SRP) lifts the oil. Today CSS design and SRP operation are tuned separately, from experience. But they are physically one system: after each steam cycle the zone cools, viscosity rises, and the rods face growing drag. The consequences are rod floating, impact loading, pump unsetting and rod failures.
+
+What we deliver:
+A reduced-order thermal model of heating and cooling with a viscosity model calibrated to published field values.
+A viscosity-aware rod-string wave-equation solver that predicts rod-float probability, minimum load, impact loading and fatigue damage before any setpoint change.
+A state estimator (ensemble Kalman filter) that keeps the twin calibrated from live pump data.
+A two-tier optimizer: a slow loop for CSS cycle parameters and a fast constrained model-predictive loop for SPM, stroke and VFD.
+Card and motor-power diagnostics, a rod-health score, an economics layer, and a phased deployment path (monitor, advise, supervised control).
+A working demo with what-if sliders, plus an ablation study that proves the value of coupling.
+2. Problem context and field facts
+2.1 Field facts from public sources
+
+2.2 The physical coupling
+The chain that the twin models end to end:
+Steam injection raises temperature in a heated zone around the well.
+During soak and production, the zone cools toward reservoir temperature (46 to 48 deg C).
+Viscosity rises steeply as temperature falls (an exponential-type dependence).
+Higher viscosity increases drag on the rod string, slowing the rod fall on the downstroke and raising loads on the upstroke.
+Result: rod floating, impact loading, fluid pound or poor pump fill, fatigue damage, pump unsetting, and higher energy per barrel.
+Falling rates then trigger the next steam cycle, and the decision is made without knowing the rod-side cost.
+2.3 Gap today
+CSS parameters (steam volume, pressure, soak, cut-off) rest largely on historical practice.
+SRP parameters (stroke, SPM, VFD) are adjusted manually and reactively.
+Reservoir, wellbore and pump behaviour are never optimized together, so SOR and energy per barrel stay high.
+3. Existing work and where the gap lies
+3.1 What the literature and industry already provide
+
+3.2 Our gap statement
+
+3.3 Likely competing submissions
+Public repositories already exist for this PS. One prototype we found uses a single well, a lumped near-wellbore volume, exponential viscosity, a capacity-limited SRP model and an ML surrogate trained on its own simulator. Expect many teams to submit a variant of: sensor stream, LSTM forecast, anomaly detection and a dashboard. Section 11 shows how ThermoRod Twin differs.
+4. Solution overview
+4.1 Traceability to PS expected outcomes
+
+4.2 Design principles
+
+
+
+
+5. System architecture
+5.1 Layered view
+
+5.2 Data flow
+Sensors -> Edge -> Data platform -> M3 (estimate state) -> M1/M2 (predict)
+        -> M6 (setpoints, hourly/daily) and M5 (CSS design, per cycle)
+        -> Operator approves -> Setpoints / CSS plan -> Field -> Sensors
+Two feedback paths run in parallel: the control path above, and the estimation path in which card-derived damping updates M1 through M3.
+6. Module specifications
+6.1 M1: Thermal reduced-order model
+Purpose: predict heating during injection and cooling afterward, and convert temperature to viscosity.
+Heated zone: growth from injected heat using a Marx-Langenheim / Boberg-Lowe style energy balance. Inputs: steam volume, quality, injection rate, pressure, net pay, formation heat capacity.
+Wellbore heat loss: Ramey-type model, with an insulation factor for VIT and thermal wellhead.
+Cooling: effective near-wellbore temperature decays toward reservoir temperature.
+T(t) = T_res + (T_0 - T_res) * exp(-t / tau)      [tau fitted per well and cycle]
+Viscosity: Walther-type relation calibrated to the crude (anchor: 10,000 to 13,000 cP at 50 deg C).
+log10(log10(mu + 0.7)) = A - B * log10(T_kelvin)
+Inflow: temperature-adjusted productivity index times drawdown, giving rate versus time, then cumulative oil and water.
+Limitation stated openly: this is a reduced-order model, not a 3D simulator. Where a CMG-STARS model exists at OIL, M1 parameters can be tuned against it.
+6.2 M2: Viscosity-aware rod-string solver
+Purpose: predict what the rod string will do for a candidate setpoint, before it is applied.
+Model: viscous-damped wave equation along a tapered rod string, with boundary conditions from the polished-rod motion (top) and pump load (bottom).
+d2u/dt2 = v^2 * d2u/dx2 - c * du/dt + g
+
+c(x,t) = c_mech + k_geom(x) * mu_eff(T(t))      [proposed form; k_geom from rod/tubing annulus geometry]
+Outputs per stroke: simulated surface and pump cards, peak and minimum polished-rod load, rod-section stresses, downhole stroke and fillage, power.
+Rod-float indicator: float occurs when viscous drag on the downstroke keeps the rods from following the polished rod down. Indicators are minimum load approaching or falling below the rod buoyant weight margin, downstroke lag between polished rod and pump, and distorted lower loop.
+Impact loading: load rate (kN/s) at valve events and at the start of the downstroke, from the solver.
+Numerics: finite differences in the style of Everitt-Jennings, sped up with a surrogate for the optimizer loop.
+Hydraulic units: a separate actuator model (stroke and speed profile) feeding the same solver.
+6.3 M3: State estimator and pump-as-thermometer
+Purpose: keep M1 anchored to reality using live pump data.
+Per stroke, fit the damping factor that best reconciles the measured surface card with the wave-equation solution (bisection-style iteration, as used in published per-stroke damping methods).
+Remove the estimated mechanical part to isolate the viscous part of damping.
+Map viscous damping to effective viscosity through the calibrated c to mu relation.
+Invert the viscosity model to obtain an effective near-wellbore temperature.
+Assimilate into M1 with an ensemble Kalman filter. State: tau, heated volume, T_0 and productivity index. Measurements: effective viscosity from damping, production test rates, wellhead temperature.
+Outputs: updated thermal state with uncertainty, and a residual signal that flags model drift or abnormal well behaviour.
+
+6.4 M4: Diagnostics
+Inputs: surface and simulated cards where load cells exist, otherwise motor power and current curves.
+Where load cells are absent, reconstruct polished-rod torque or load from motor power with a physics-driven model, then classify.
+Classes: normal, rod float, fluid pound, gas interference, tagging, worn or leaking valves, pump unsetting precursors, high friction.
+Training: cards generated by M2 across conditions, augmented with generative models (GAN or diffusion) following published parallel-learning ideas, then fine-tuned on real cards when OIL data is available.
+Also: anomaly detection on power and card features for early unsetting warnings; explainability by highlighting which card region drove the decision.
+6.5 M7: Rod reliability
+Stress ranges per rod section from M2, converted to allowable stress with a modified Goodman diagram.
+S_allow = (0.25 * T_min_tensile + 0.5625 * S_min) * SF        [API-style modified Goodman]
+Cumulative fatigue damage with Miner's rule, tracked per well as a live state.
+D = sum( n_i / N_i )      failure risk rises as D approaches 1
+Outputs: rod-health score, remaining-life estimate, and failure-risk probability from a survival model trained on the failure and unsetting history. Remaining life is a constraint in M5 and M6.
+6.6 M5: Slow loop, CSS cycle optimizer
+Decision variables: steam volume, injection rate and pressure, soak time, production cut-off. Optional: diluent volume, downhole heater power, if used on the well.
+Evaluation: a fast proxy of M1 and M2 (trained on runs of the models), so thousands of candidate cycles evaluate in seconds.
+Method: NSGA-II or Bayesian optimization for a Pareto front over four objectives: cumulative oil (maximize), SOR (minimize), energy per barrel (minimize), rod damage (minimize).
+Output: a Pareto front the engineer picks from, plus a single recommended cycle with an explanation.
+Run when a cycle ends or production nears the cut-off, and for candidate wells for the next cycle.
+6.7 M6: Fast loop, SRP setpoint controller
+Decision variables: SPM, stroke length, VFD frequency (or stroke and speed profile for hydraulic units).
+Method: constrained model predictive control using M2 as the model over a short horizon (hours to days), with the M1 cooling forecast supplying the expected viscosity trajectory.
+Objective: maximize produced fluid and pump fillage while minimizing energy and fatigue damage.
+Hard constraints: rod stress below Goodman allowable in every section, minimum load above float threshold, load-rate limit, SPM and VFD limits, pump fillage above a minimum, structural unit limits.
+Behaviour: as viscosity is predicted to rise, SPM is slowed in advance to keep rods falling freely, and speeds up while the zone is hot. This replaces reactive manual adjustment.
+Mode: advisory first; supervised automatic control only after operators trust the recommendations.
+6.8 M8: Economics and impact model
+J = oil * price - steam * steam_cost - energy * tariff - P(failure) * workover_cost
+All recommendations show rupees per barrel, kWh per barrel, SOR, avoided failures and avoided workover cost.
+Cost parameters are inputs that OIL can set. We use clearly labeled placeholders.
+6.9 Field-specific extensions
+
+
+
+
+7. Optimization formulation
+8. Data strategy
+8.1 Data we expect from OIL
+Production history, CSS cycle records, steam injection parameters, VFD and SRP operating data, rod failure and pump unsetting history, completion and reservoir data, fluid properties and pressure data (as listed in the PS).
+8.2 If real data is not available in time
+Build a synthetic multi-well, multi-cycle generator from M1 and M2 with sensor noise, missing data, drift and injected events (float, fluid pound, gas interference, unsetting, rod failure) at realistic frequencies.
+Augment cards with generative models to widen coverage.
+State clearly in every result that it comes from synthetic data. Use the same pipeline to retrain on OIL data later.
+Anchor the synthetic world to public facts: viscosity range, depth, reservoir temperature, published production levels.
+8.3 Data quality
+Automated checks for stuck or flat sensors, out-of-range values, timestamp gaps, unit mismatches, and card sanity (closed loop, plausible loads). Bad data is flagged and excluded rather than silently used.
+9. Validation and evaluation plan
+9.1 Model validation
+
+9.2 Ablation: proving that coupling matters
+Same synthetic wells and same failure physics, three operating policies:
+Baseline: fixed CSS design and manual, reactive SRP settings (representing current practice).
+SRP-only optimization: fast loop active, CSS design unchanged.
+Coupled: both loops active with the thermal forecast shared.
+Metrics: cumulative oil, SOR, kWh per barrel, float events, unsetting events per year, rod damage, cost per barrel. The gap between policies 2 and 3 is the evidence for the coupling thesis. Report as ranges over many random seeds, not a single run.
+9.3 Uncertainty and sensitivity
+Ensembles for M1 and M3 give confidence bands on temperature, viscosity and rate.
+Sensitivity plots for the most influential parameters (tau, viscosity slope, damping map).
+Robustness test: rerun the ablation with wrong model parameters to show that the estimator recovers and the optimizer stays safe.
+10. Application and demo design
+10.1 Screens
+
+
+
+
+
+
+10.2 Operations features
+Bilingual English and Hindi interface, mobile-friendly views, SMS/WhatsApp alerts for float and unsetting risk.
+Approve, modify or reject workflow, with a full audit log of recommendations and decisions.
+Offline edge mode for alerts.
+10.3 Three-minute demo script
+Show a well just after steam: temperature falls, viscosity rises, rod load and float risk climb.
+Move the steam-volume slider and show the whole chain update, including cost.
+Switch on the coupled optimizer: a setpoint schedule appears, float events disappear in the simulation.
+Open the pump-as-thermometer panel: measured damping tracks predicted temperature, and the estimator corrects a deliberately wrong model.
+Close with the ablation chart and the rupees per barrel result.
+11. Differentiation from existing and likely competing solutions
+
+11.1 Five things judges will remember
+The pump-as-thermometer idea and the two-way coupling.
+Physics that a petroleum engineer recognizes: wave equation, viscosity-temperature, Goodman and Miner.
+An ablation that quantifies the value of coupling instead of just claiming it.
+Field realism: hydraulic units, VIT, VFD-only wells, edge alerts, phased deployment.
+Honesty: stated assumptions, uncertainty bands, and known limits.
+12. Expected benefits and how they are measured
+These are simulation targets to be validated on OIL data, not guaranteed outcomes.
+13. Deployment roadmap
+14. Risks and mitigations
+15. Build plan and team roles
+15.1 Build order
+M1 thermal model and viscosity calibration; validate against public viscosity values.
+M2 wave-equation solver with float detection and fatigue calculation.
+Synthetic data generator with injected failures.
+M3 damping identification and EnKF (the novelty; build early to learn whether it works).
+M4 diagnostics and M7 reliability.
+M5 and M6 optimizers, then the ablation study.
+Demo UI, economics panel and pitch materials.
+15.2 Suggested roles (4 to 6 members)
+16. Questions to clarify with mentors and OIL
+Will real or anonymized data be provided, and in what format and resolution?
+Which SRP controllers and VFDs are installed, and which wells have load cells or downhole gauges?
+How many wells use hydraulic units versus conventional beam units?
+How is CSS steam generated and allocated across wells?
+What are current SOR, failure and unsetting rates, to use as the baseline?
+Is the expected output advisory only, or should closed-loop control be demonstrated?
+Is a calibrated thermal simulation model available to tune M1 against?
+17. References and sources
+Field and operator information
+Oil India Limited, Rajasthan Fields page (oil-india.com/rajasthan-fields): CSS with SRP, VIT and thermal wellheads, viscosity and depth, well counts.
+Press Trust of India via Business Standard and others, 5 April 2026: Oil India record production from Rajasthan, CSS on 19 wells.
+SPE Asia Pacific Oil and Gas Conference 2023: Case study on electrical downhole heater for heavy, highly viscous crude of Baghewala field.
+Rod pumping physics
+Gibbs, S.G. (1963): Predicting the behavior of sucker-rod pumping systems (viscous-damped wave equation).
+Everitt, T.A. and Jennings, J.W.: An improved finite-difference calculation of downhole dynamometer cards for sucker-rod pumps.
+Robust parameter estimation in rod pump systems, Southwestern Petroleum Short Course (2024): per-stroke viscous damping iteration.
+Li, Q. et al.: Study on equivalent viscous damping coefficient of sucker rod based on the principle of equal friction loss (open access).
+SPE-159593-MS: Modeling and dynamical analysis of the wave equation of sucker-rod pumping system.
+CSS and steam optimization
+Guevara, J.L., Patel, R., Trivedi, J. (2021): Optimization of steam injection in SAGD using reinforcement learning. J. Pet. Sci. Eng. 206, 108735.
+Swadesi, B. et al. (2021): Optimizing combined steam flooding and cyclic steam stimulation through reservoir proxy modeling. J. Pet. Explor. Prod. Technol. 11.
+Reservoir performance prediction in steam huff and puff injection using proxy modelling, Applied Sciences 12(6), 2022.
+Sun, Q. and Ertekin, T. (2015): ANN-based universal proxies for SAGD and CSS, SPE-174074-MS.
+Sequence-based proxy and reinforcement learning for huff-and-puff optimization (ScienceDirect, 2024).
+Dynamometer card AI
+ParaDC: parallel-learning dynamometer card augmentation with diffusion models, Neurocomputing (2024).
+Automatic recognition of sucker-rod pumping working conditions using dynamometer cards with transfer learning and SVM (PMC7582724).
+Intelligent dynamometer card generation, diagnosis and failure detection using deep neural networks, SPE ATCE 2019.
+Fault diagnosis of sucker rod pump based on deep-broad learning using motor data, and physics-informed WGAN-GP augmentation.
+Sources were found through web search and read as abstracts or excerpts. Confirm details in the full papers before citing numbers formally.
